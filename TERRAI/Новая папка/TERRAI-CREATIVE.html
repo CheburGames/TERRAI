@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>terrAI CREATIVE MODE — полёт переключается</title>
+    <style>
+        * { user-select: none; -webkit-tap-highlight-color: transparent; }
+        body { background: #0a0c12; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: 'Courier New', monospace; margin: 0; padding: 20px; }
+        .game-container { background: #1e212c; border-radius: 28px; padding: 20px; box-shadow: 0 15px 30px rgba(0,0,0,0.6); }
+        canvas { display: block; margin: 0 auto; border-radius: 16px; cursor: crosshair; box-shadow: 0 0 0 3px #594d36; background: #2d2f3a; }
+        .panel { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; gap: 12px; flex-wrap: wrap; background: #151a24aa; backdrop-filter: blur(8px); padding: 8px 20px; border-radius: 60px; }
+        .mode-badge, .weapon-indicator, .time-indicator, .inventory { background: #0f111ccc; padding: 6px 16px; border-radius: 40px; color: #ffdfaa; font-weight: bold; }
+        button { background: #4a3b24; border: none; color: #ffe1a0; font-weight: bold; padding: 6px 18px; border-radius: 60px; cursor: pointer; font-family: monospace; }
+        .block-selector { display: flex; gap: 8px; background: #00000066; padding: 6px 16px; border-radius: 40px; margin-top: 12px; justify-content: center; }
+        .block-btn { background: #3a2e1a; border: none; color: #ffdd99; padding: 5px 15px; border-radius: 30px; cursor: pointer; font-size: 12px; font-weight: bold; }
+        .block-btn.active { background: #ffaa44; color: #1e1a0a; box-shadow: 0 0 8px gold; }
+        .info { color: #a9b7d4; font-size: 11px; text-align: center; margin-top: 12px; }
+        .version { font-size: 10px; color: #6b6f82; text-align: center; margin-top: 8px; }
+        .creative-badge { background: #ffaa44; color: #1a1a2a; padding: 4px 12px; border-radius: 40px; font-weight: bold; margin-left: 10px; }
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <canvas id="terrCanvas" width="800" height="480"></canvas>
+    <div class="panel">
+        <div class="mode-badge" id="modeText">⛏️ Режим: Копать <span class="creative-badge">🎨 CREATIVE MODE</span></div>
+        <div class="weapon-indicator" id="weaponText">⚔️ Меч (E)</div>
+        <div class="time-indicator" id="timeIndicator">🌞 ДЕНЬ</div>
+        <div class="inventory">🧱<span id="dirtCount">∞</span> 🌿<span id="grassCount">∞</span> 🪨<span id="stoneCount">∞</span> 🌲<span id="woodCount">∞</span> 🥩<span id="meatCount">∞</span> 💎<span id="crystalCount">∞</span> 🕯️<span id="altarCount">∞</span></div>
+        <button id="switchModeBtn">🔄 Сменить режим</button>
+    </div>
+    <div class="block-selector">
+        <button class="block-btn" data-block="1">🟫 Земля</button>
+        <button class="block-btn" data-block="2">🍃 Трава</button>
+        <button class="block-btn" data-block="3">🪨 Камень</button>
+        <button class="block-btn" data-block="4">🪵 Дерево</button>
+        <button class="block-btn" data-block="6">🕯️ Алтарь</button>
+        <button class="block-btn" data-block="7">💎 Древний алтарь</button>
+    </div>
+    <div class="info">
+        🎨 CREATIVE MODE: Бесконечные ресурсы | 🕊️ Пробел в воздухе = включить/выключить полёт | W/S в полёте<br>
+        🛡️ Неуязвимость | ⚡ Мгновенное копание/стройка | 🖱️ ЛКМ - копать | ПКМ - строить | A/D - ходьба | E - меч
+    </div>
+    <div class="version">terrAI CREATIVE MODE — полёт переключается пробелом</div>
+</div>
+
+<script>
+(function(){
+    const canvas = document.getElementById('terrCanvas');
+    const ctx = canvas.getContext('2d');
+    const TILE_SIZE = 24;
+    const WORLD_W = 34;
+    const WORLD_H = 20;
+    
+    const AIR = 0, DIRT = 1, GRASS = 2, STONE = 3, WOOD = 4, LEAVES = 5, ALTAR = 6, ANCIENT_ALTAR = 7;
+    const COLORS = { [AIR]: "#2d2f3a", [DIRT]: "#8b5a2b", [GRASS]: "#528a3b", [STONE]: "#6c6f7e", [WOOD]: "#c4a276", [LEAVES]: "#5cb85c", [ALTAR]: "#ddaa66", [ANCIENT_ALTAR]: "#ffaa55" };
+    
+    let inventory = { [DIRT]: 999, [GRASS]: 999, [STONE]: 999, [WOOD]: 999, meat: 999, crystal: 999, [ALTAR]: 999, [ANCIENT_ALTAR]: 999 };
+    let world = [], enemies = [], pigs = [], drainers = [];
+    let breakMode = true, selectedBlock = DIRT, hasSword = true, attackCooldown = 0;
+    let isDay = true, dayTimer = 0;
+    let bossActive = false;
+    let deadeye = null;
+    const DAY_CYCLE = 1200;
+    
+    let isFlying = false;
+    let flySpeed = 5;
+    
+    let player = { x: 12*24, y: 10*24, w: 14, h: 20, vx: 0, vy: 0, onGround: false, health: 100, maxHealth: 100 };
+    const GRAV = 0.55, JUMP = -7.2, SPEED = 3.5;
+    
+    class DeadEye {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.w = 48; this.h = 48;
+            this.health = 200;
+            this.maxHealth = 200;
+            this.attackTimer = 0;
+        }
+        update() {
+            if(this.x < player.x - 50) this.x += 1;
+            if(this.x > player.x + 50) this.x -= 1;
+            if(this.y < player.y - 80) this.y += 0.8;
+            if(this.y > player.y - 80) this.y -= 0.8;
+        }
+        draw() {
+            ctx.fillStyle = "#ffcc44";
+            ctx.fillRect(this.x, this.y, this.w, this.h);
+            ctx.fillStyle = "#aa8822";
+            ctx.fillRect(this.x+8, this.y+8, this.w-16, this.h-16);
+            ctx.fillStyle = "#ff4444";
+            ctx.fillRect(this.x+18, this.y+18, 12, 12);
+            ctx.fillStyle = "white";
+            ctx.fillRect(this.x+22, this.y+22, 4, 4);
+            ctx.fillStyle = "#aa3333";
+            ctx.fillRect(this.x, this.y-8, this.w, 6);
+            ctx.fillStyle = "#44ff44";
+            ctx.fillRect(this.x, this.y-8, this.w * (this.health/this.maxHealth), 6);
+        }
+    }
+    
+    class MiniEye {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.w = 16; this.h = 16;
+            this.health = 20;
+            this.vx = (Math.random() - 0.5) * 1.5;
+            this.vy = (Math.random() - 0.5) * 1.5;
+        }
+        update() {
+            this.x += this.vx; this.y += this.vy;
+            if(this.x < 2) this.x = 2;
+            if(this.x + this.w > WORLD_W * TILE_SIZE - 2) this.x = WORLD_W * TILE_SIZE - this.w - 2;
+            if(this.y < 0) this.y = 0;
+            if(this.y + this.h > WORLD_H * TILE_SIZE) this.y = WORLD_H * TILE_SIZE - this.h;
+        }
+        draw() {
+            ctx.fillStyle = "#ff8888";
+            ctx.fillRect(this.x, this.y, this.w, this.h);
+            ctx.fillStyle = "black";
+            ctx.fillRect(this.x+6, this.y+6, 4, 4);
+        }
+    }
+    
+    let bossDead = false;
+    
+    function summonDeadEye(altarX, altarY) {
+        if(bossActive) return;
+        bossActive = true;
+        bossDead = false;
+        deadeye = new DeadEye(altarX * TILE_SIZE - 12, (altarY - 3) * TILE_SIZE);
+        world[altarY][altarX] = AIR;
+        updateInventoryUI();
+        showMessage("⚠️ DEADEYE ПРОБУДИЛСЯ (в креативе он мирный)! ⚠️");
+    }
+    
+    function showMessage(msg) {
+        let msgDiv = document.createElement('div');
+        msgDiv.innerText = msg;
+        msgDiv.style.position = 'fixed';
+        msgDiv.style.top = '30%';
+        msgDiv.style.left = '50%';
+        msgDiv.style.transform = 'translate(-50%, -50%)';
+        msgDiv.style.backgroundColor = 'black';
+        msgDiv.style.color = 'red';
+        msgDiv.style.padding = '20px';
+        msgDiv.style.fontSize = '24px';
+        msgDiv.style.fontWeight = 'bold';
+        msgDiv.style.border = '3px solid red';
+        msgDiv.style.borderRadius = '16px';
+        msgDiv.style.zIndex = '1000';
+        document.body.appendChild(msgDiv);
+        setTimeout(() => msgDiv.remove(), 2000);
+    }
+    
+    function isSolid(tile) { return tile !== AIR && tile !== undefined; }
+    
+    function generateWorld() {
+        world = [];
+        for(let y=0; y<WORLD_H; y++) { world[y] = []; for(let x=0; x<WORLD_W; x++) world[y][x] = AIR; }
+        for(let x=0; x<WORLD_W; x++) {
+            let hill = Math.sin(x*0.4)*1.5;
+            let groundY = 13 + Math.floor(hill);
+            groundY = Math.min(WORLD_H-4, Math.max(11, groundY));
+            for(let y=0; y<WORLD_H; y++) {
+                if(y === groundY) world[y][x] = GRASS;
+                else if(y > groundY && y < groundY+4) world[y][x] = DIRT;
+                else if(y >= groundY+4 && y < WORLD_H-2) world[y][x] = STONE;
+                else if(y >= WORLD_H-2) world[y][x] = STONE;
+            }
+        }
+        for(let t=0; t<8; t++) {
+            let treeX = 4 + Math.random()*(WORLD_W-8);
+            let groundY = -1;
+            for(let y=0; y<WORLD_H; y++) if(world[y][treeX] === GRASS) { groundY = y; break; }
+            if(groundY > 0 && groundY < WORLD_H-5) {
+                for(let h=1; h<=3; h++) if(groundY-h >= 0 && world[groundY-h][treeX] === AIR) world[groundY-h][treeX] = WOOD;
+                for(let lx=-1; lx<=1; lx++) for(let ly=-2; ly<=0; ly++) {
+                    let leafX = treeX+lx, leafY = groundY-3+ly;
+                    if(leafX>=0 && leafX<WORLD_W && leafY>=0 && leafY<WORLD_H && world[leafY][leafX] === AIR) world[leafY][leafX] = LEAVES;
+                }
+            }
+        }
+        for(let i=0; i<3; i++) {
+            let x = 2 + Math.floor(Math.random() * (WORLD_W - 4));
+            let y = 15 + Math.floor(Math.random() * (WORLD_H - 16));
+            if(world[y][x] === STONE) world[y][x] = ANCIENT_ALTAR;
+        }
+    }
+    
+    function collideWithWorld(axis) {
+        let leftTile = Math.floor(player.x/TILE_SIZE), rightTile = Math.floor((player.x+player.w-1)/TILE_SIZE);
+        let topTile = Math.floor(player.y/TILE_SIZE), bottomTile = Math.floor((player.y+player.h-1)/TILE_SIZE);
+        leftTile = Math.max(0, leftTile); rightTile = Math.min(WORLD_W-1, rightTile);
+        topTile = Math.max(0, topTile); bottomTile = Math.min(WORLD_H-1, bottomTile);
+        for(let y=topTile; y<=bottomTile; y++) {
+            for(let x=leftTile; x<=rightTile; x++) {
+                if(isSolid(world[y][x]) && world[y][x] !== ANCIENT_ALTAR) {
+                    const blockLeft = x*TILE_SIZE, blockRight = blockLeft+TILE_SIZE;
+                    const blockTop = y*TILE_SIZE, blockBottom = blockTop+TILE_SIZE;
+                    if(axis === 'x') {
+                        if(player.vx > 0) { const overlap = (player.x+player.w)-blockLeft; if(overlap>0) { player.x -= overlap; player.vx=0; } }
+                        else if(player.vx < 0) { const overlap = blockRight-player.x; if(overlap>0) { player.x += overlap; player.vx=0; } }
+                    } else if(axis === 'y') {
+                        if(player.vy > 0 && !isFlying) { 
+                            const overlap = (player.y+player.h)-blockTop; 
+                            if(overlap>0 && overlap<=TILE_SIZE+4) { player.y -= overlap; player.vy=0; player.onGround=true; } 
+                        } else if(player.vy < 0 && !isFlying) { 
+                            const overlap = blockBottom-player.y; 
+                            if(overlap>0 && overlap<=TILE_SIZE+4) { player.y += overlap; player.vy=0; } 
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    const keys = { ArrowLeft: false, ArrowRight: false, KeyA: false, KeyD: false, Space: false, ArrowUp: false, KeyE: false, KeyW: false, KeyS: false };
+    
+    function updatePlayer() {
+        let move = 0;
+        if(keys.ArrowLeft || keys.KeyA) move = -1;
+        if(keys.ArrowRight || keys.KeyD) move = 1;
+        player.vx = move * SPEED;
+        player.x += player.vx; collideWithWorld('x');
+        
+        // Переключение полёта: пробел в воздухе (если не на земле) → меняем режим полёта
+        if((keys.Space || keys.ArrowUp)) {
+            if(!player.onGround && !isFlying) {
+                isFlying = true;
+                player.vy = -2;
+            } else if(isFlying) {
+                isFlying = false;
+                player.vy = 2;
+            } else if(player.onGround && !isFlying) {
+                player.vy = JUMP;
+                player.onGround = false;
+            }
+            keys.Space = false;
+            keys.ArrowUp = false;
+        }
+        
+        if(isFlying) {
+            if(keys.KeyW) player.vy = -flySpeed;
+            if(keys.KeyS) player.vy = flySpeed;
+            player.vy *= 0.98;
+            player.y += player.vy;
+        } else {
+            player.vy += GRAV;
+            player.y += player.vy;
+        }
+        
+        player.onGround = false;
+        collideWithWorld('y');
+        
+        if(!isFlying && player.onGround) {
+            isFlying = false;
+        }
+        
+        if(player.x < 2) player.x = 2;
+        if(player.x+player.w > WORLD_W*TILE_SIZE-2) player.x = WORLD_W*TILE_SIZE - player.w - 2;
+        if(player.y < 0) player.y = 0;
+        if(player.y+player.h > WORLD_H*TILE_SIZE) { 
+            player.y = WORLD_H*TILE_SIZE - player.h; 
+            player.vy = 0; 
+            player.onGround = true;
+            isFlying = false;
+        }
+    }
+    
+    function updateTime() { dayTimer++; if(dayTimer>=DAY_CYCLE) { dayTimer=0; isDay=!isDay; document.getElementById('timeIndicator').innerHTML = isDay ? "🌞 ДЕНЬ" : "🌙 НОЧЬ"; if(isDay) drainers = []; } }
+    
+    class Slime {
+        constructor(x,y) { this.x=x; this.y=y; this.w=18; this.h=14; this.vx=(Math.random()-0.5)*0.8; this.vy=0; this.health=20; }
+        update() { let speed=0.7; if(player.x<this.x) this.vx=-speed; else this.vx=speed; this.x+=this.vx; this.vy+=GRAV*0.8; this.y+=this.vy;
+            const groundY = Math.floor((this.y+this.h)/TILE_SIZE); if(groundY<WORLD_H) { for(let tx=Math.floor(this.x/TILE_SIZE); tx<=Math.floor((this.x+this.w)/TILE_SIZE); tx++) { if(tx>=0 && tx<WORLD_W && isSolid(world[groundY][tx]) && world[groundY][tx] !== ANCIENT_ALTAR) { if(this.y+this.h>groundY*TILE_SIZE) { this.y=groundY*TILE_SIZE-this.h; this.vy=0; } } } }
+            if(this.x<2) this.x=2; if(this.x+this.w>WORLD_W*TILE_SIZE-2) this.x=WORLD_W*TILE_SIZE-this.w-2; if(this.y+this.h>WORLD_H*TILE_SIZE) { this.y=WORLD_H*TILE_SIZE-this.h; this.vy=0; } }
+        draw() { ctx.fillStyle="#6f9e3f"; ctx.fillRect(this.x,this.y,this.w,this.h); ctx.fillStyle="#3a6a1a"; ctx.fillRect(this.x+3,this.y+3,4,4); ctx.fillStyle="white"; ctx.fillRect(this.x+12,this.y+5,3,3); }
+    }
+    class Pig {
+        constructor(x,y) { this.x=x; this.y=y; this.w=18; this.h=14; this.vx=(Math.random()-0.5)*0.4; this.vy=0; }
+        update() { this.x+=this.vx; this.vy+=GRAV*0.6; this.y+=this.vy;
+            const groundY = Math.floor((this.y+this.h)/TILE_SIZE); if(groundY<WORLD_H) { for(let tx=Math.floor(this.x/TILE_SIZE); tx<=Math.floor((this.x+this.w)/TILE_SIZE); tx++) { if(tx>=0 && tx<WORLD_W && isSolid(world[groundY][tx]) && world[groundY][tx] !== ANCIENT_ALTAR) { if(this.y+this.h>groundY*TILE_SIZE) { this.y=groundY*TILE_SIZE-this.h; this.vy=0; } } } }
+            if(this.x<2) this.x=2; if(this.x+this.w>WORLD_W*TILE_SIZE-2) this.x=WORLD_W*TILE_SIZE-this.w-2; if(this.y+this.h>WORLD_H*TILE_SIZE) { this.y=WORLD_H*TILE_SIZE-this.h; this.vy=0; }
+            if(Math.random()<0.02) this.vx=(Math.random()-0.5)*0.6; }
+        draw() { ctx.fillStyle="#f4a4a4"; ctx.fillRect(this.x,this.y,this.w,this.h); ctx.fillStyle="#d47a7a"; ctx.fillRect(this.x+3,this.y+3,4,4); ctx.fillStyle="black"; ctx.fillRect(this.x+13,this.y+5,3,3); ctx.fillStyle="#ffaaaa"; ctx.fillRect(this.x+8,this.y+9,4,3); }
+    }
+    class Drainer {
+        constructor(x,y) { this.x=x; this.y=y; this.w=18; this.h=16; this.vx=0; this.vy=0; this.health=40; }
+        update() { if(isDay) { if(this.x<canvas.width/2) this.vx=-2.2; else this.vx=2.2; } else { let speed=SPEED*2.2; if(player.x<this.x) this.vx=-speed; else this.vx=speed; }
+            this.x+=this.vx; this.vy+=GRAV*0.8; this.y+=this.vy;
+            const groundY = Math.floor((this.y+this.h)/TILE_SIZE); if(groundY<WORLD_H) { for(let tx=Math.floor(this.x/TILE_SIZE); tx<=Math.floor((this.x+this.w)/TILE_SIZE); tx++) { if(tx>=0 && tx<WORLD_W && isSolid(world[groundY][tx]) && world[groundY][tx] !== ANCIENT_ALTAR) { if(this.y+this.h>groundY*TILE_SIZE) { this.y=groundY*TILE_SIZE-this.h; this.vy=0; } } } }
+            if(this.x<-50) this.x=-50; if(this.x+this.w>WORLD_W*TILE_SIZE+50) this.x=WORLD_W*TILE_SIZE-this.w+50;
+            if(this.y+this.h>WORLD_H*TILE_SIZE) { this.y=WORLD_H*TILE_SIZE-this.h; this.vy=0; } }
+        draw() { ctx.fillStyle="#2a0a3a"; ctx.fillRect(this.x,this.y,this.w,this.h); ctx.fillStyle="#4a1a6a"; ctx.fillRect(this.x+2,this.y+2,this.w-4,this.h-4); ctx.fillStyle="#ff0000"; ctx.fillRect(this.x+4,this.y+5,4,4); ctx.fillRect(this.x+10,this.y+5,4,4); ctx.fillStyle="#8a4aff"; ctx.fillRect(this.x+6,this.y+11,6,3); }
+    }
+    
+    function attackWithSword() {
+        if(!hasSword || attackCooldown>0) return;
+        attackCooldown = 10;
+        for(let e of enemies) { let dx=Math.abs(e.x+e.w/2-(player.x+player.w/2)), dy=Math.abs(e.y+e.h/2-(player.y+player.h/2)); if(dx<55 && dy<50) e.health-=999; }
+        for(let d of drainers) { let dx=Math.abs(d.x+d.w/2-(player.x+player.w/2)), dy=Math.abs(d.y+d.h/2-(player.y+player.h/2)); if(dx<55 && dy<50) d.health-=999; }
+        if(deadeye && !bossDead) {
+            let dx=Math.abs(deadeye.x+deadeye.w/2-(player.x+player.w/2)), dy=Math.abs(deadeye.y+deadeye.h/2-(player.y+player.h/2));
+            if(dx<80 && dy<80) deadeye.health -= 999;
+            if(deadeye.health <= 0) {
+                bossActive = false;
+                bossDead = true;
+                deadeye = null;
+                showMessage("✨ DEADEYE ПОВЕРЖЕН! ✨");
+            }
+        }
+        enemies = enemies.filter(e=>e.health>0);
+        drainers = drainers.filter(d=>d.health>0);
+    }
+    
+    function spawnMobs() {
+        if(!bossActive) {
+            if(enemies.length<5 && Math.random()<0.03) { let side = Math.random()<0.5?20:WORLD_W*TILE_SIZE-40; enemies.push(new Slime(side, 11*TILE_SIZE)); }
+            if(pigs.length<4 && Math.random()<0.02) { let side = 30+Math.random()*(WORLD_W*TILE_SIZE-60); pigs.push(new Pig(side, 12*TILE_SIZE)); }
+            if(!isDay && drainers.length<2 && Math.random()<0.04) { let side = Math.random()<0.5?-20:WORLD_W*TILE_SIZE+10; drainers.push(new Drainer(side, 11*TILE_SIZE)); }
+        }
+    }
+    
+    function canReachBlock(bx,by) { return true; }
+    
+    function breakBlock(bx,by) {
+        let type = world[by][bx];
+        if(type !== AIR && type !== undefined) {
+            world[by][bx] = AIR;
+            return true;
+        }
+        return false;
+    }
+    
+    function placeBlock(bx,by) {
+        if(world[by][bx] === AIR) {
+            world[by][bx] = selectedBlock;
+            return true;
+        }
+        return false;
+    }
+    
+    function getBlockAtMouse(e) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width/rect.width, scaleY = canvas.height/rect.height;
+        let clientX, clientY;
+        if(e.touches) { clientX=e.touches[0].clientX; clientY=e.touches[0].clientY; }
+        else { clientX=e.clientX; clientY=e.clientY; }
+        const canvasX = (clientX-rect.left)*scaleX, canvasY = (clientY-rect.top)*scaleY;
+        const bx = Math.floor(canvasX/TILE_SIZE), by = Math.floor(canvasY/TILE_SIZE);
+        if(bx>=0 && bx<WORLD_W && by>=0 && by<WORLD_H) return {x:bx, y:by};
+        return null;
+    }
+    
+    function handleAction(e, isRightClick) {
+        e.preventDefault();
+        const block = getBlockAtMouse(e);
+        if(!block) return;
+        if(isRightClick && world[block.y][block.x] === ALTAR && inventory.crystal >= 1) {
+            summonDeadEye(block.x, block.y);
+            return;
+        }
+        if(breakMode && !isRightClick) breakBlock(block.x, block.y);
+        else if(!breakMode && !isRightClick) placeBlock(block.x, block.y);
+        else if(isRightClick) { if(breakMode) placeBlock(block.x, block.y); else breakBlock(block.x, block.y); }
+    }
+    
+    function handlePigClick(e) {
+        const block = getBlockAtMouse(e);
+        if(!block) return;
+        for(let i=0; i<pigs.length; i++) {
+            const pig = pigs[i];
+            const pigTileX = Math.floor(pig.x/TILE_SIZE), pigTileY = Math.floor(pig.y/TILE_SIZE);
+            if(Math.abs(pigTileX-block.x)<=1 && Math.abs(pigTileY-block.y)<=1) {
+                pigs.splice(i,1);
+                break;
+            }
+        }
+    }
+    
+    function updateInventoryUI() {
+        document.getElementById('dirtCount').innerText = "∞";
+        document.getElementById('grassCount').innerText = "∞";
+        document.getElementById('stoneCount').innerText = "∞";
+        document.getElementById('woodCount').innerText = "∞";
+        document.getElementById('meatCount').innerText = "∞";
+        document.getElementById('crystalCount').innerText = "∞";
+        document.getElementById('altarCount').innerText = "∞";
+    }
+    
+    function drawWorld() {
+        for(let y=0; y<WORLD_H; y++) for(let x=0; x<WORLD_W; x++) {
+            const type = world[y][x];
+            ctx.fillStyle = COLORS[type] || "#2d2f3a";
+            ctx.fillRect(x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE-0.5, TILE_SIZE-0.5);
+            if(type !== AIR && type !== undefined) { ctx.fillStyle = "#00000033"; ctx.fillRect(x*TILE_SIZE+3, y*TILE_SIZE+3, 4, 4); }
+            if(type === ALTAR) { ctx.fillStyle = "#ffcc88aa"; ctx.fillRect(x*TILE_SIZE+8, y*TILE_SIZE+8, 8, 8); }
+            if(type === ANCIENT_ALTAR) { ctx.fillStyle = "#ffaa55aa"; ctx.fillRect(x*TILE_SIZE+6, y*TILE_SIZE+6, 12, 12); }
+        }
+        if(!isDay) { ctx.fillStyle = "#00000088"; ctx.fillRect(0,0,canvas.width,canvas.height); }
+    }
+    
+    function drawPlayer() {
+        ctx.fillStyle = "#e0aa6e"; ctx.fillRect(player.x, player.y, player.w, player.h);
+        ctx.fillStyle = "#ac6e3e"; ctx.fillRect(player.x+3, player.y+3, 4, 8);
+        ctx.fillStyle = "#5d3a1a"; ctx.fillRect(player.x+9, player.y+4, 4, 5);
+        ctx.fillStyle = "white"; ctx.fillRect(player.x+10, player.y+8, 2, 2);
+        if(hasSword && attackCooldown>0) { ctx.fillStyle = "#ffffffaa"; ctx.fillRect(player.x+player.w/2-10, player.y-15, 20, 8); }
+        ctx.fillStyle = "#aa3333"; ctx.fillRect(player.x, player.y-8, player.w, 4);
+        ctx.fillStyle = "#44ff44"; ctx.fillRect(player.x, player.y-8, player.w, 4);
+        if(isFlying) {
+            ctx.fillStyle = "#aaffff";
+            ctx.font = "bold 12px monospace";
+            ctx.fillText("🕊️ ПОЛЁТ (нажми Пробел)", player.x-20, player.y-12);
+        }
+    }
+    
+    function drawUI() {
+        ctx.font = "bold 12px monospace"; ctx.fillStyle = "#ffeac5";
+        const blockNames = {1:"ЗЕМЛЯ",2:"ТРАВА",3:"КАМЕНЬ",4:"ДЕРЕВО",6:"АЛТАРЬ",7:"ДРЕВНИЙ"};
+        ctx.fillText(`🔨 ${blockNames[selectedBlock] || "БЛОК"}`, 12, 28);
+        ctx.fillStyle = breakMode ? "#ffaa66" : "#66ffaa";
+        ctx.fillText(breakMode ? "⛏️ КОПАТЬ" : "🧱 СТРОИТЬ", 12, 52);
+        ctx.fillStyle = "#ffaa66"; ctx.fillText(`❤️ ∞`, canvas.width-50, 28);
+        if(hasSword) ctx.fillText(`⚔️ МЕЧ`, canvas.width-100, 52);
+        ctx.fillStyle = "#ffaa66"; ctx.fillText(`🎨 CREATIVE`, canvas.width-130, 75);
+        if(bossActive && deadeye) {
+            ctx.fillStyle = "gold";
+            ctx.font = "bold 20px monospace";
+            ctx.fillText("DEADEYE (мирный)", canvas.width/2-80, 40);
+        }
+    }
+    
+    function update() {
+        if(attackCooldown>0) attackCooldown--;
+        updateTime(); updatePlayer();
+        for(let e of enemies) e.update(); for(let p of pigs) p.update(); for(let d of drainers) d.update();
+        enemies = enemies.filter(e=>e.health>0);
+        drainers = drainers.filter(d=>d.health>0);
+        if(bossActive && deadeye) deadeye.update();
+        spawnMobs();
+    }
+    
+    function render() { drawWorld(); if(deadeye) deadeye.draw(); for(let e of enemies) e.draw(); for(let p of pigs) p.draw(); for(let d of drainers) d.draw(); drawPlayer(); drawUI(); }
+    function gameLoop() { update(); render(); requestAnimationFrame(gameLoop); }
+    
+    function initEvents() {
+        window.addEventListener('keydown', (e) => { 
+            let code=e.code; 
+            if(keys.hasOwnProperty(code)) { keys[code]=true; e.preventDefault(); } 
+            if(code==='Space'||code==='ArrowUp') { keys.Space=true; keys.ArrowUp=true; e.preventDefault(); } 
+            if(code==='KeyE') { hasSword=!hasSword; document.getElementById('weaponText').innerHTML = hasSword ? "⚔️ Меч (E)" : "✋ Руки (E)"; e.preventDefault(); } 
+        });
+        window.addEventListener('keyup', (e) => { 
+            let code=e.code; 
+            if(keys.hasOwnProperty(code)) keys[code]=false; 
+            if(code==='Space') keys.Space=false; 
+            if(code==='ArrowUp') keys.ArrowUp=false; 
+        });
+        canvas.addEventListener('mousedown', (e) => { 
+            if(e.button===0) { if(hasSword && breakMode) attackWithSword(); handlePigClick(e); handleAction(e,false); } 
+            else if(e.button===2) handleAction(e,true); 
+            e.preventDefault(); 
+        });
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleAction(e,false); });
+    }
+    
+    function setupUI() {
+        document.getElementById('switchModeBtn').addEventListener('click', () => { breakMode = !breakMode; document.getElementById('modeText').innerHTML = breakMode ? "⛏️ Режим: Копать 🎨 CREATIVE" : "🧱 Режим: Строить 🎨 CREATIVE"; });
+        document.getElementById('modeText').addEventListener('click', () => { breakMode = !breakMode; document.getElementById('modeText').innerHTML = breakMode ? "⛏️ Режим: Копать 🎨 CREATIVE" : "🧱 Режим: Строить 🎨 CREATIVE"; });
+        document.querySelectorAll('.block-btn').forEach(btn => { 
+            btn.addEventListener('click', () => { 
+                selectedBlock = parseInt(btn.dataset.block); 
+                document.querySelectorAll('.block-btn').forEach(b => b.classList.remove('active')); 
+                btn.classList.add('active'); 
+            }); 
+        });
+        updateInventoryUI();
+    }
+    
+    generateWorld(); initEvents(); setupUI(); updateInventoryUI();
+    player.x = 12*TILE_SIZE; player.y = 10*TILE_SIZE;
+    gameLoop();
+})();
+</script>
+</body>
+</html>
